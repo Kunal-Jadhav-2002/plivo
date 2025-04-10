@@ -1,4 +1,5 @@
 import os
+import time
 from flask import Flask, request, Response
 from plivo import plivoxml
 from openai import OpenAI
@@ -54,19 +55,31 @@ def save_transcription():
 @app.route("/process-recording", methods=["POST"])
 def process_recording():
     recording_url = request.form.get("RecordUrl")
-    recording_id = recording_url.split("/")[-1].split(".")[0] if recording_url else None
+    recording_id = request.form.get("RecordingID")
 
     print(f"🎙️ Recording URL: {recording_url}")
     print(f"🆔 Recording ID: {recording_id}")
 
-    # Get transcription from memory
-    transcript = transcript_memory.get(recording_id, "Sorry, I couldn't understand. Could you please repeat?")
+    # Wait for transcription (poll for 10 seconds max)
+    timeout = 10
+    start_time = time.time()
+    transcript = None
+
+    while time.time() - start_time < timeout:
+        transcript = transcript_memory.get(recording_id)
+        if transcript:
+            break
+        time.sleep(1)
+
+    if not transcript:
+        transcript = "Sorry, I couldn't understand. Could you please repeat?"
+
     print(f"📜 Transcript used: {transcript}")
 
     # Generate AI reply
     reply = get_ai_response(transcript)
 
-    # Create response XML to continue the conversation
+    # Create response XML
     response = plivoxml.ResponseElement()
     response.add(plivoxml.SpeakElement(reply))
     response.add(
