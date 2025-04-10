@@ -93,7 +93,7 @@ def incoming_call():
 
     response = plivoxml.ResponseElement()
     get_digits = plivoxml.GetDigitsElement(
-        action="https://web-production-7351.up.railway.app/handle-menu",
+        action="https://web-production-675e.up.railway.app/handle-menu",
         method="POST",
         timeout=10,
         num_digits=1,
@@ -114,12 +114,12 @@ def handle_menu():
         response.add(plivoxml.SpeakElement("Please describe your query after the beep."))
         response.add(
             plivoxml.RecordElement(
-                action="https://web-production-7351.up.railway.app/process-recording",
+                action="https://web-production-675e.up.railway.app/process-recording",
                 method="POST",
                 max_length=30,
                 timeout=5,
                 transcription_type="auto",
-                transcription_url="https://web-production-7351.up.railway.app/transcription",
+                transcription_url="https://web-production-675e.up.railway.app/transcription",
                 transcription_method="POST",
                 play_beep=True
             )
@@ -172,12 +172,12 @@ def process_recording():
 
     # Ask for another query from the user, loop the process
     response.add(plivoxml.RecordElement(
-        action="https://web-production-7351.up.railway.app/process-recording",
+        action="https://web-production-675e.up.railway.app/process-recording",
         method="POST",
         max_length=30,
         timeout=5,
         transcription_type="auto",
-        transcription_url="https://web-production-7351.up.railway.app/transcription",
+        transcription_url="https://web-production-675e.up.railway.app/transcription",
         transcription_method="POST",
         play_beep=True
     ))
