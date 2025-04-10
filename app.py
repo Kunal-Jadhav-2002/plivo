@@ -54,7 +54,7 @@ def save_transcription():
 @app.route("/process-recording", methods=["POST"])
 def process_recording():
     recording_url = request.form.get("RecordUrl")
-    recording_id = request.form.get("RecordingID")
+    recording_id = recording_url.split("/")[-1].split(".")[0] if recording_url else None
 
     print(f"🎙️ Recording URL: {recording_url}")
     print(f"🆔 Recording ID: {recording_id}")
