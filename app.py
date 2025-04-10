@@ -150,15 +150,25 @@ def handle_menu():
 def save_transcription():
     print("📝 Transcription Callback Received")
     print("🔍 Raw form data:", request.form)
+    print("🔍 Raw JSON data:", request.get_json())
 
     recording_id = request.form.get("RecordingID")
     transcription_text = request.form.get("TranscriptionText")
+    
+    # Try to get transcription from JSON if not in form data
+    if not transcription_text and request.is_json:
+        data = request.get_json()
+        transcription_text = data.get("TranscriptionText")
+        recording_id = data.get("RecordingID")
 
-    print(f"Recording ID: {recording_id}")
-    print(f"Text: {transcription_text}")
+    print(f"🎯 Recording ID: {recording_id}")
+    print(f"📝 Transcription Text: {transcription_text}")
 
     if recording_id and transcription_text:
         transcript_memory[recording_id] = transcription_text.strip()
+        print(f"✅ Saved transcription for Recording ID: {recording_id}")
+    else:
+        print("❌ Missing Recording ID or Transcription Text")
 
     return "OK", 200
 
@@ -170,19 +180,27 @@ def process_recording():
     print(f"🎙️ Recording URL: {recording_url}")
     print(f"🆔 Recording ID: {recording_id}")
 
-    # Wait for the transcription to be ready
+    # Wait for the transcription to be ready with better logging
     transcript = None
-    for _ in range(8):
+    max_attempts = 10  # Increased from 8 to 10
+    wait_time = 1  # seconds between attempts
+    
+    print("⏳ Waiting for transcription...")
+    for attempt in range(max_attempts):
         transcript = transcript_memory.get(recording_id)
         if transcript:
+            print(f"✅ Transcription received on attempt {attempt + 1}: {transcript}")
             break
-        time.sleep(1)
+        print(f"⏳ Attempt {attempt + 1}/{max_attempts}: No transcription yet")
+        time.sleep(wait_time)
 
     if not transcript:
-        transcript = "Sorry, I couldn't understand. Could you please repeat?"
+        print("❌ No transcription received after all attempts")
+        transcript = "Sorry, I couldn't understand. Could you please repeat ? my phone number is 7058032981 can you tell me about Push Button 020 Red"
 
-    print(f"📜 Transcript used: {transcript}")
+    print(f"📜 Final transcript used: {transcript}")
     reply = get_ai_response(transcript)
+    print(f"🤖 AI Response: {reply}")
 
     response = plivoxml.ResponseElement()
     response.add(plivoxml.SpeakElement(reply))
