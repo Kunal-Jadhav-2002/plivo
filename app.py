@@ -10,6 +10,18 @@ from dotenv import load_dotenv
 load_dotenv()
 app = Flask(__name__)
 
+# Check for required environment variables
+required_env_vars = [
+    "OPENAI_API_KEY",
+    "PLIVO_AUTH_ID",
+    "PLIVO_AUTH_TOKEN",
+    "DATABASE_URL"
+]
+
+missing_vars = [var for var in required_env_vars if not os.getenv(var)]
+if missing_vars:
+    raise EnvironmentError(f"Missing required environment variables: {', '.join(missing_vars)}")
+
 # Initialize OpenAI client
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 transcript_memory = {}
@@ -19,12 +31,16 @@ PLIVO_AUTH_ID = os.getenv("PLIVO_AUTH_ID")
 PLIVO_AUTH_TOKEN = os.getenv("PLIVO_AUTH_TOKEN")
 
 # Database connection pool
-db_pool = psycopg2.pool.SimpleConnectionPool(
-    minconn=1,
-    maxconn=5,
-    dsn=os.getenv('DATABASE_URL'),
-    sslmode='require'
-)
+try:
+    db_pool = psycopg2.pool.SimpleConnectionPool(
+        minconn=1,
+        maxconn=5,
+        dsn=os.getenv('DATABASE_URL'),
+        sslmode='require'
+    )
+except Exception as e:
+    print(f"❌ Database connection error: {e}")
+    raise
 
 def insert_user_data(username, email, phone_number):
     conn = db_pool.getconn()
@@ -93,7 +109,7 @@ def incoming_call():
 
     response = plivoxml.ResponseElement()
     get_digits = plivoxml.GetDigitsElement(
-        action="https://web-production-675e.up.railway.app/handle-menu",
+        action="https://web-production-aa492.up.railway.app/handle-menu",
         method="POST",
         timeout=10,
         num_digits=1,
@@ -114,12 +130,12 @@ def handle_menu():
         response.add(plivoxml.SpeakElement("Please describe your query after the beep."))
         response.add(
             plivoxml.RecordElement(
-                action="https://web-production-675e.up.railway.app/process-recording",
+                action="https://web-production-aa492.up.railway.app/process-recording",
                 method="POST",
                 max_length=30,
                 timeout=5,
                 transcription_type="auto",
-                transcription_url="https://web-production-675e.up.railway.app/transcription",
+                transcription_url="https://web-production-aa492.up.railway.app/transcription",
                 transcription_method="POST",
                 play_beep=True
             )
@@ -172,12 +188,12 @@ def process_recording():
 
     # Ask for another query from the user, loop the process
     response.add(plivoxml.RecordElement(
-        action="https://web-production-675e.up.railway.app/process-recording",
+        action="https://web-production-aa492.up.railway.app/process-recording",
         method="POST",
         max_length=30,
         timeout=5,
         transcription_type="auto",
-        transcription_url="https://web-production-675e.up.railway.app/transcription",
+        transcription_url="https://web-production-aa492.up.railway.app/transcription",
         transcription_method="POST",
         play_beep=True
     ))
