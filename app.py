@@ -28,7 +28,7 @@ def incoming_call():
     )
     response.add(
         plivoxml.RecordElement(
-            action="https://web-production-7351.up.railway.app/process-recording",
+            action="",
             method="POST",
             max_length=30,
             timeout=10,
@@ -41,47 +41,24 @@ def incoming_call():
     return Response(response.to_string(), mimetype='text/xml')
 
 @app.route("/transcription", methods=["POST"])
-def save_transcription():
+def transcription_handler():
     recording_id = request.form.get("RecordingID")
     transcription_text = request.form.get("TranscriptionText")
 
     print(f"📝 Transcription Received:\nRecording ID: {recording_id}\nText: {transcription_text}")
 
-    if recording_id and transcription_text:
-        transcript_memory[recording_id] = transcription_text.strip()
-    return "OK", 200
+    if not transcription_text:
+        transcription_text = "Sorry, I couldn't understand. Could you please repeat?"
 
+    # Generate AI response
+    reply = get_ai_response(transcription_text.strip())
 
-@app.route("/process-recording", methods=["POST"])
-def process_recording():
-    recording_url = request.form.get("RecordUrl")
-    recording_id = request.form.get("RecordingID")
-
-    print(f"🎙️ Recording URL: {recording_url}")
-    print(f"🆔 Recording ID: {recording_id}")
-
-    # Wait until transcription is ready (retry for up to 5 seconds)
-    transcript = None
-    for _ in range(10):
-        transcript = transcript_memory.get(recording_id)
-        if transcript:
-            break
-        time.sleep(1)
-
-    if not transcript:
-        transcript = "Sorry, I couldn't understand. Could you please repeat?"
-
-    print(f"📜 Transcript used: {transcript}")
-
-    # Generate AI reply
-    reply = get_ai_response(transcript)
-
-    # Create response XML
+    # Respond with AI-generated message and ask again
     response = plivoxml.ResponseElement()
     response.add(plivoxml.SpeakElement(reply))
     response.add(
         plivoxml.RecordElement(
-            action="https://web-production-7351.up.railway.app/process-recording",
+            action="",  # Still not needed
             method="POST",
             max_length=30,
             timeout=10,
