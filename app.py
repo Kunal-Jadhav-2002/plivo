@@ -24,12 +24,12 @@ def incoming_call():
     )
     response.add(
         plivoxml.RecordElement(
-            action="/process-recording",
+            action="https://web-production-7351.up.railway.app/process-recording",
             method="POST",
             max_length=30,
             timeout=10,
             transcription_type="auto",
-            transcription_url="/transcription",
+            transcription_url="https://web-production-7351.up.railway.app/transcription",
             transcription_method="POST",
             play_beep=True
         )
@@ -52,12 +52,12 @@ def process_recording():
     response.add(plivoxml.SpeakElement(reply))
     response.add(
         plivoxml.RecordElement(
-            action="/process-recording",
+            action="https://web-production-7351.up.railway.app/process-recording",
             method="POST",
             max_length=30,
             timeout=10,
             transcription_type="auto",
-            transcription_url="/transcription",
+            transcription_url="https://web-production-7351.up.railway.app/transcription",
             transcription_method="POST",
             play_beep=True
         )
