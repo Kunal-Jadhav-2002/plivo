@@ -11,6 +11,10 @@ app = Flask(__name__)
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 transcript_memory = {}
 
+# Plivo Authentication
+PLIVO_AUTH_ID = os.getenv("PLIVO_AUTH_ID")
+PLIVO_AUTH_TOKEN = os.getenv("PLIVO_AUTH_TOKEN")
+
 @app.route("/", methods=["GET"])
 def home():
     return "✅ Flask is running!"
@@ -81,6 +85,7 @@ def process_recording():
     print(f"🎙️ Recording URL: {recording_url}")
     print(f"🆔 Recording ID: {recording_id}")
 
+    # Wait for the transcription to be ready
     transcript = None
     for _ in range(8):
         transcript = transcript_memory.get(recording_id)
@@ -96,7 +101,19 @@ def process_recording():
 
     response = plivoxml.ResponseElement()
     response.add(plivoxml.SpeakElement(reply))
-    response.add(plivoxml.HangupElement())
+
+    # Ask for another query from the user, loop the process.
+    response.add(plivoxml.RecordElement(
+        action="https://web-production-7351.up.railway.app/process-recording",
+        method="POST",
+        max_length=30,
+        timeout=5,
+        transcription_type="auto",
+        transcription_url="https://web-production-7351.up.railway.app/transcription",
+        transcription_method="POST",
+        play_beep=True
+    ))
+
     return Response(response.to_string(), mimetype="text/xml")
 
 def get_ai_response(query):
