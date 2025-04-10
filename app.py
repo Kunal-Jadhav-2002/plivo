@@ -9,6 +9,9 @@ app = Flask(__name__)
 
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
+# In-memory store for storing transcriptions
+transcript_memory = {}
+
 @app.route("/", methods=["GET"])
 def home():
     return "✅ Flask server is running!"
@@ -36,18 +39,34 @@ def incoming_call():
     )
     return Response(response.to_string(), mimetype='text/xml')
 
+@app.route("/transcription", methods=["POST"])
+def save_transcription():
+    recording_id = request.form.get("RecordingID")
+    transcription_text = request.form.get("TranscriptionText")
+
+    print(f"📝 Transcription Received:\nRecording ID: {recording_id}\nText: {transcription_text}")
+
+    if recording_id and transcription_text:
+        transcript_memory[recording_id] = transcription_text.strip()
+    return "OK", 200
+
+
 @app.route("/process-recording", methods=["POST"])
 def process_recording():
     recording_url = request.form.get("RecordUrl")
+    recording_id = request.form.get("RecordingID")
+
     print(f"🎙️ Recording URL: {recording_url}")
+    print(f"🆔 Recording ID: {recording_id}")
 
-    # Placeholder for transcription step (use Whisper or manual transcription here)
-    transcript = "What are your working hours?"  # TODO: Use Whisper or similar service
+    # Get transcription from memory
+    transcript = transcript_memory.get(recording_id, "Sorry, I couldn't understand. Could you please repeat?")
+    print(f"📜 Transcript used: {transcript}")
 
-    # Get response from OpenAI
+    # Generate AI reply
     reply = get_ai_response(transcript)
 
-    # Create next XML response
+    # Create response XML to continue the conversation
     response = plivoxml.ResponseElement()
     response.add(plivoxml.SpeakElement(reply))
     response.add(
