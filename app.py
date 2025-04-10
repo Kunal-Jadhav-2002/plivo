@@ -1,6 +1,7 @@
 import os
 import time
 import json
+from psycopg2 import pool
 import psycopg2
 from flask import Flask, request, Response
 from plivo import plivoxml
@@ -32,7 +33,7 @@ PLIVO_AUTH_TOKEN = os.getenv("PLIVO_AUTH_TOKEN")
 
 # Database connection pool
 try:
-    db_pool = psycopg2.pool.SimpleConnectionPool(
+    db_pool = pool.SimpleConnectionPool(
         minconn=1,
         maxconn=5,
         dsn=os.getenv('DATABASE_URL'),

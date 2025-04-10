@@ -2,5 +2,5 @@ flask
 plivo
 openai
 python-dotenv
-psycopg2-binary
+psycopg2
 gunicorn
