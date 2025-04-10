@@ -60,12 +60,9 @@ def process_recording():
     print(f"🎙️ Recording URL: {recording_url}")
     print(f"🆔 Recording ID: {recording_id}")
 
-    # Wait for transcription (poll for 10 seconds max)
-    timeout = 10
-    start_time = time.time()
+    # Wait until transcription is ready (retry for up to 5 seconds)
     transcript = None
-
-    while time.time() - start_time < timeout:
+    for _ in range(10):
         transcript = transcript_memory.get(recording_id)
         if transcript:
             break
