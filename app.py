@@ -1,5 +1,7 @@
 import os
 import time
+import json
+import psycopg2
 from flask import Flask, request, Response
 from plivo import plivoxml
 from openai import OpenAI
@@ -8,12 +10,78 @@ from dotenv import load_dotenv
 load_dotenv()
 app = Flask(__name__)
 
+# Initialize OpenAI client
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 transcript_memory = {}
 
 # Plivo Authentication
 PLIVO_AUTH_ID = os.getenv("PLIVO_AUTH_ID")
 PLIVO_AUTH_TOKEN = os.getenv("PLIVO_AUTH_TOKEN")
+
+# Database connection pool
+db_pool = psycopg2.pool.SimpleConnectionPool(
+    minconn=1,
+    maxconn=5,
+    dsn=os.getenv('DATABASE_URL'),
+    sslmode='require'
+)
+
+def insert_user_data(username, email, phone_number):
+    conn = db_pool.getconn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO users (username, email, phone_number)
+                VALUES (%s, %s, %s);
+            """, (username, email, phone_number))
+            conn.commit()
+        return True
+    finally:
+        db_pool.putconn(conn)
+
+def get_user_by_phone(phone_number):
+    conn = db_pool.getconn()
+    try:
+        with conn.cursor() as cur:
+            normalized_phone = ''.join(filter(str.isdigit, str(phone_number)))
+            cur.execute("""
+                SELECT username, email
+                FROM users
+                WHERE phone_number = %s
+                LIMIT 1;
+            """, (normalized_phone,))
+            result = cur.fetchone()
+            return {'username': result[0], 'email': result[1]} if result else False
+    except Exception as e:
+        print(f"Database error: {e}")
+        return False
+    finally:
+        db_pool.putconn(conn)
+
+def get_ai_response(query):
+    try:
+        completion = client.chat.completions.create(
+            model="gpt-4",
+            messages=[
+                {
+                    "role": "system",
+                    "content": """You are a helpful product information assistant. Your task is to help users by answering their questions about products. 
+                    When answering questions:
+                    1. Be concise and clear
+                    2. If you don't have specific information about a product, say so
+                    3. If the user's question is unclear, ask for clarification
+                    4. Keep responses brief and to the point
+                    5. If the user wants to book a meeting, provide the calendly link: https://calendly.com/ai-tecnvi-ai/30min"""
+                },
+                {"role": "user", "content": query}
+            ],
+            max_tokens=150,
+            temperature=0.7
+        )
+        return completion.choices[0].message.content
+    except Exception as e:
+        print(f"❌ OpenAI Error: {e}")
+        return "Sorry, I couldn't understand that. Please repeat."
 
 @app.route("/", methods=["GET"])
 def home():
@@ -102,7 +170,7 @@ def process_recording():
     response = plivoxml.ResponseElement()
     response.add(plivoxml.SpeakElement(reply))
 
-    # Ask for another query from the user, loop the process.
+    # Ask for another query from the user, loop the process
     response.add(plivoxml.RecordElement(
         action="https://web-production-7351.up.railway.app/process-recording",
         method="POST",
@@ -115,20 +183,6 @@ def process_recording():
     ))
 
     return Response(response.to_string(), mimetype="text/xml")
-
-def get_ai_response(query):
-    try:
-        completion = client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": "You are a helpful assistant."},
-                {"role": "user", "content": query}
-            ]
-        )
-        return completion.choices[0].message.content
-    except Exception as e:
-        print(f"❌ OpenAI Error: {e}")
-        return "Sorry, I couldn't understand that. Please repeat."
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
