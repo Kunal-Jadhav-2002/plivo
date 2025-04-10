@@ -1,0 +1,4 @@
+flask
+plivo
+openai
+python-dotenv
