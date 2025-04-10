@@ -7,19 +7,19 @@ from dotenv import load_dotenv
 
 load_dotenv()
 app = Flask(__name__)
+
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-# Store temporary data
-call_memory = {}
+# In-memory storage
+transcript_memory = {}
 
 @app.route("/", methods=["GET"])
 def home():
-    return "✅ Flask is running!"
+    return "✅ Server is running!"
 
 @app.route("/incoming-call", methods=["POST"])
 def incoming_call():
-    print("📞 Incoming call from Plivo:")
-    print(request.form)
+    print("📞 Incoming call:", request.form)
 
     response = plivoxml.ResponseElement()
     get_digits = plivoxml.GetDigitsElement(
@@ -29,10 +29,10 @@ def incoming_call():
         num_digits=1,
         retries=1
     )
-    get_digits.add_speak("Press 1 to talk to our virtual assistant. Press 2 to end the call.")
+    get_digits.add_speak("Welcome to Tecnvirons. Press 1 to talk to our bot. Press 2 to end the call.")
     response.add(get_digits)
-    response.add_speak("No input received. Goodbye!")
-    return Response(response.to_string(), mimetype='text/xml')
+    response.add(plivoxml.SpeakElement("No input received. Goodbye."))
+    return Response(response.to_string(), mimetype="text/xml")
 
 @app.route("/handle-menu", methods=["POST"])
 def handle_menu():
@@ -42,7 +42,9 @@ def handle_menu():
     response = plivoxml.ResponseElement()
 
     if digit == "1":
-        response.add(plivoxml.SpeakElement("Connecting you to our assistant."))
+        response.add(
+            plivoxml.SpeakElement("You are now connected to our AI assistant. Please speak after the beep.")
+        )
         response.add(
             plivoxml.RecordElement(
                 action="https://web-production-7351.up.railway.app/process-recording",
@@ -55,70 +57,62 @@ def handle_menu():
                 play_beep=True
             )
         )
-    elif digit == "2":
-        response.add(plivoxml.SpeakElement("Thank you for calling. Goodbye!"))
     else:
-        response.add(plivoxml.SpeakElement("Invalid input. Goodbye!"))
+        response.add(plivoxml.SpeakElement("Thank you. Goodbye."))
 
-    return Response(response.to_string(), mimetype='text/xml')
-
-@app.route("/process-recording", methods=["POST"])
-def process_recording():
-    recording_url = request.form.get("RecordUrl")
-    recording_id = request.form.get("RecordingID")
-    call_uuid = request.form.get("CallUUID")
-
-    print(f"🎙️ Recording URL: {recording_url}")
-    print(f"🆔 Recording ID: {recording_id}")
-
-    # Save for later use when transcription arrives
-    if recording_id:
-        call_memory[recording_id] = {
-            "url": recording_url,
-            "transcript": None,
-            "call_uuid": call_uuid
-        }
-
-    return "OK", 200
+    return Response(response.to_string(), mimetype="text/xml")
 
 @app.route("/transcription", methods=["POST"])
-def transcription():
+def save_transcription():
     recording_id = request.form.get("RecordingID")
     transcription_text = request.form.get("TranscriptionText")
 
     print(f"📝 Transcription Received:\nRecording ID: {recording_id}\nText: {transcription_text}")
 
-    if recording_id in call_memory:
-        call_memory[recording_id]["transcript"] = transcription_text.strip() if transcription_text else ""
-
-        # AI response
-        transcript = call_memory[recording_id]["transcript"]
-        if not transcript:
-            transcript = "Sorry, I couldn't understand. Could you please repeat?"
-
-        print(f"📜 Transcript used: {transcript}")
-        reply = get_ai_response(transcript)
-
-        # Respond with Plivo XML: speak reply + record again
-        response = plivoxml.ResponseElement()
-        response.add(plivoxml.SpeakElement(reply))
-        response.add(
-            plivoxml.RecordElement(
-                action="https://web-production-7351.up.railway.app/process-recording",
-                method="POST",
-                max_length=30,
-                timeout=10,
-                transcription_type="auto",
-                transcription_url="https://web-production-7351.up.railway.app/transcription",
-                transcription_method="POST",
-                play_beep=True
-            )
-        )
-
-        return Response(response.to_string(), mimetype="text/xml")
-
-    print("⚠️ No matching recording ID found.")
+    if recording_id and transcription_text:
+        transcript_memory[recording_id] = transcription_text.strip()
     return "OK", 200
+
+@app.route("/process-recording", methods=["POST"])
+def process_recording():
+    recording_url = request.form.get("RecordUrl")
+    recording_id = request.form.get("RecordingID")
+
+    print(f"🎙️ Recording URL: {recording_url}")
+    print(f"🆔 Recording ID: {recording_id}")
+
+    # Wait up to 10 seconds for transcription
+    transcript = None
+    for _ in range(10):
+        transcript = transcript_memory.get(recording_id)
+        if transcript:
+            break
+        time.sleep(1)
+
+    if not transcript:
+        transcript = "Sorry, I couldn't understand. Could you please repeat?"
+
+    print(f"📜 Transcript used: {transcript}")
+
+    # Get AI response
+    reply = get_ai_response(transcript)
+
+    # Respond back
+    response = plivoxml.ResponseElement()
+    response.add(plivoxml.SpeakElement(reply))
+    response.add(
+        plivoxml.RecordElement(
+            action="https://web-production-7351.up.railway.app/process-recording",
+            method="POST",
+            max_length=30,
+            timeout=10,
+            transcription_type="auto",
+            transcription_url="https://web-production-7351.up.railway.app/transcription",
+            transcription_method="POST",
+            play_beep=True
+        )
+    )
+    return Response(response.to_string(), mimetype="text/xml")
 
 def get_ai_response(query):
     try:
@@ -132,7 +126,7 @@ def get_ai_response(query):
         return completion.choices[0].message.content
     except Exception as e:
         print(f"❌ OpenAI Error: {e}")
-        return "Sorry, I couldn't understand. Please repeat."
+        return "Sorry, there was an error. Please try again."
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
