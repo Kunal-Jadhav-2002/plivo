@@ -14,7 +14,7 @@ load_dotenv()
 app = Flask(__name__)
 
 # Set up API keys
-GENAI_API_KEY = "AIzaSyAoFIX9PCfWnNQdrJ2ZwuMEjrg-WeWJke0"
+GENAI_API_KEY = os.getenv("GENAI_API_KEY")
 PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
 
 # Configure Gemini API
@@ -49,6 +49,7 @@ required_env_vars = [
     "PLIVO_AUTH_ID",
     "PLIVO_AUTH_TOKEN",
     "DATABASE_URL",
+    "GENAI_API_KEY",
     "PINECONE_API_KEY"
 ]
 
@@ -76,57 +77,8 @@ except Exception as e:
     print(f"❌ Database connection error: {e}")
     raise
 
-def insert_user_data(username, email, phone_number):
-    conn = db_pool.getconn()
-    try:
-        with conn.cursor() as cur:
-            cur.execute("""
-                INSERT INTO users (username, email, phone_number)
-                VALUES (%s, %s, %s);
-            """, (username, email, phone_number))
-            conn.commit()
-        return True
-    finally:
-        db_pool.putconn(conn)
-
-def get_user_by_phone(phone_number):
-    conn = db_pool.getconn()
-    try:
-        with conn.cursor() as cur:
-            normalized_phone = ''.join(filter(str.isdigit, str(phone_number)))
-            cur.execute("""
-                SELECT username, email
-                FROM users
-                WHERE phone_number = %s
-                LIMIT 1;
-            """, (normalized_phone,))
-            result = cur.fetchone()
-            return {'username': result[0], 'email': result[1]} if result else False
-    except Exception as e:
-        print(f"Database error: {e}")
-        return False
-    finally:
-        db_pool.putconn(conn)
-
-def get_ai_response(query):
-    try:
-        # Generate embedding for the query
-        query_response = genai.embed_content(model="models/text-embedding-004", content=query)
-        query_embedding = query_response["embedding"]
-
-        # Search in Pinecone
-        search_results = index.query(vector=query_embedding, top_k=5, include_metadata=True)
-
-        # Extract search results
-        context_lst = []
-        for match in search_results["matches"]:
-            chunk_text = match["metadata"]["text"]
-            context_lst.append(chunk_text)
-
-        context = "\n-----------------\n".join(context_lst)
-
-        # Generate response using Gemini
-        prompt = f"""
+def request_llm_to_get_summarize(query, context):
+    user_question_content = f"""
 You are a highly accurate and detail-oriented question-answering assistant. Your task is to help users by answering their questions about products based on the provided search results. The search results contain information about multiple products, and each product has the following details:
 
 - **PRODUCT NAME**: The name of the product.
@@ -151,8 +103,31 @@ You are a highly accurate and detail-oriented question-answering assistant. Your
 ### Your Task:
 Provide a clear and concise answer to the user's question based on the search results.
 """
-        response = llm_model_gemini.generate_content(prompt)
-        return response.text
+    response = llm_model_gemini.generate_content(user_question_content)
+    return response.text
+
+def generate_text_answer(query_text):
+    print("query_text input to generate_text_answer: ", query_text)
+    query_response = genai.embed_content(model="models/text-embedding-004", content=query_text)
+    query_embedding = query_response["embedding"]
+
+    # Search in Pinecone
+    search_results = index.query(vector=query_embedding, top_k=5, include_metadata=True)
+
+    # Extract search results
+    context_lst = []
+    for match in search_results["matches"]:
+        chunk_text = match["metadata"]["text"]
+        context_lst.append(chunk_text)
+
+    context = "\n-----------------\n".join(context_lst)
+    answer = request_llm_to_get_summarize(query_text, context)
+    return answer
+
+def get_ai_response(query):
+    try:
+        answer = generate_text_answer(query)
+        return answer
     except Exception as e:
         print(f"❌ Error generating response: {e}")
         return "I apologize, but I'm having trouble understanding that. Could you please repeat your question?"
@@ -274,7 +249,7 @@ def process_recording():
 
     if not transcript:
         print("❌ No transcription received after all attempts")
-        transcript = "Sorry, I couldn't understand. Could you please repeat ? my phone number is 7058032981 can you tell me about Push Button 020 Red from database."
+        transcript = "Sorry, I couldn't understand. Could you please repeat?"
 
     print(f"📜 Final transcript used: {transcript}")
     reply = get_ai_response(transcript)
