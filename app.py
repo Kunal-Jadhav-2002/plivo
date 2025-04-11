@@ -1,6 +1,7 @@
 import os
 import time
 import json
+import logging
 from psycopg2 import pool
 import psycopg2
 from flask import Flask, request, Response
@@ -9,6 +10,10 @@ from openai import OpenAI
 from dotenv import load_dotenv
 import google.generativeai as genai
 from pinecone import Pinecone, ServerlessSpec
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Load environment variables
 load_dotenv()
@@ -32,62 +37,70 @@ def validate_environment():
     
     if missing_vars:
         error_msg = "Missing required environment variables:\n" + "\n".join(f"- {var}" for var in missing_vars)
-        print(f"❌ {error_msg}")
+        logger.error(error_msg)
         raise EnvironmentError(error_msg)
     
-    print("✅ All environment variables are set")
+    logger.info("✅ All environment variables are set")
 
 # Validate environment before proceeding
 validate_environment()
 
-# Initialize APIs with error handling
-try:
-    # Initialize OpenAI
-    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-    print("✅ OpenAI client initialized")
+# Initialize global variables
+client = None
+llm_model_gemini = None
+index = None
+db_pool = None
 
-    # Initialize Gemini
-    genai.configure(api_key=os.getenv("GENAI_API_KEY"))
-    llm_model_gemini = genai.GenerativeModel("gemini-1.5-flash")
-    print("✅ Gemini API configured")
+def initialize_services():
+    """Initialize all external services with error handling"""
+    global client, llm_model_gemini, index, db_pool
+    
+    try:
+        # Initialize OpenAI
+        client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+        logger.info("✅ OpenAI client initialized")
 
-    # Initialize Pinecone
-    pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
-    print("✅ Pinecone client initialized")
+        # Initialize Gemini
+        genai.configure(api_key=os.getenv("GENAI_API_KEY"))
+        llm_model_gemini = genai.GenerativeModel("gemini-1.5-flash")
+        logger.info("✅ Gemini API configured")
 
-    # Setup Pinecone index
-    index_name = "voice-bot-gemini-embedding-004-index"
-    if index_name not in pc.list_indexes().names():
-        print("Creating new Pinecone index...")
-        pc.create_index(
-            name=index_name,
-            dimension=768,
-            metric="cosine",
-            spec=ServerlessSpec(cloud="aws", region="us-east-1"),
+        # Initialize Pinecone
+        pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
+        logger.info("✅ Pinecone client initialized")
+
+        # Setup Pinecone index
+        index_name = "voice-bot-gemini-embedding-004-index"
+        if index_name not in pc.list_indexes().names():
+            logger.info("Creating new Pinecone index...")
+            pc.create_index(
+                name=index_name,
+                dimension=768,
+                metric="cosine",
+                spec=ServerlessSpec(cloud="aws", region="us-east-1"),
+            )
+            logger.info("✅ New Pinecone index created")
+        else:
+            logger.info("✅ Using existing Pinecone index")
+
+        index = pc.Index(index_name)
+        logger.info("✅ Connected to Pinecone index")
+
+        # Initialize database connection
+        db_pool = pool.SimpleConnectionPool(
+            minconn=1,
+            maxconn=5,
+            dsn=os.getenv('DATABASE_URL'),
+            sslmode='require'
         )
-        print("✅ New Pinecone index created")
-    else:
-        print("✅ Using existing Pinecone index")
+        logger.info("✅ Database connection pool created")
 
-    index = pc.Index(index_name)
-    print("✅ Connected to Pinecone index")
+    except Exception as e:
+        logger.error(f"❌ Error during service initialization: {str(e)}")
+        raise
 
-except Exception as e:
-    print(f"❌ Error during API initialization: {str(e)}")
-    raise
-
-# Initialize database connection
-try:
-    db_pool = pool.SimpleConnectionPool(
-        minconn=1,
-        maxconn=5,
-        dsn=os.getenv('DATABASE_URL'),
-        sslmode='require'
-    )
-    print("✅ Database connection pool created")
-except Exception as e:
-    print(f"❌ Database connection error: {str(e)}")
-    raise
+# Initialize services
+initialize_services()
 
 # Initialize other variables
 transcript_memory = {}
@@ -97,35 +110,39 @@ PLIVO_AUTH_TOKEN = os.getenv("PLIVO_AUTH_TOKEN")
 def request_llm_to_get_summarize(query, context):
     """Generate response using Gemini with error handling"""
     try:
-        print(f"🤖 Processing query: {query[:100]}...")
+        if not llm_model_gemini:
+            raise ValueError("Gemini model not initialized")
+            
+        logger.info(f"🤖 Processing query: {query[:100]}...")
         user_question_content = f"""
-You are a highly accurate and detail-oriented question-answering assistant. Your task is to help users by answering their questions about products based on the provided search results.
+You are a helpful assistant that answers questions about products based on the provided information.
 
-### Current User Question:
-{query}
+Question: {query}
 
-### Search Results:
-{context}
+Context: {context}
 
-Please provide a clear and concise answer based on the search results.
+Please provide a clear and concise answer based on the context.
 """
         response = llm_model_gemini.generate_content(user_question_content)
         return response.text
     except Exception as e:
-        print(f"❌ Error in request_llm_to_get_summarize: {str(e)}")
+        logger.error(f"❌ Error in request_llm_to_get_summarize: {str(e)}")
         return "I apologize, but I'm having trouble generating a response. Please try again."
 
 def generate_text_answer(query_text):
     """Generate answer using vector search with error handling"""
     try:
-        print("🔍 Generating embeddings...")
+        if not index:
+            raise ValueError("Pinecone index not initialized")
+            
+        logger.info("🔍 Generating embeddings...")
         query_response = genai.embed_content(
             model="models/text-embedding-004",
             content=query_text
         )
         query_embedding = query_response["embedding"]
 
-        print("🔍 Searching in Pinecone...")
+        logger.info("🔍 Searching in Pinecone...")
         search_results = index.query(
             vector=query_embedding,
             top_k=5,
@@ -144,7 +161,7 @@ def generate_text_answer(query_text):
         return request_llm_to_get_summarize(query_text, context)
 
     except Exception as e:
-        print(f"❌ Error in generate_text_answer: {str(e)}")
+        logger.error(f"❌ Error in generate_text_answer: {str(e)}")
         return "I apologize, but I'm having trouble searching for information. Please try again."
 
 def get_ai_response(query):
@@ -153,11 +170,11 @@ def get_ai_response(query):
         if not query or not isinstance(query, str):
             return "Please provide a valid query."
         
-        print(f"📝 Processing query: {query}")
+        logger.info(f"📝 Processing query: {query}")
         answer = generate_text_answer(query)
         return answer
     except Exception as e:
-        print(f"❌ Error in get_ai_response: {str(e)}")
+        logger.error(f"❌ Error in get_ai_response: {str(e)}")
         return "I apologize, but I'm having trouble understanding that. Could you please repeat your question?"
 
 @app.route("/", methods=["GET"])
