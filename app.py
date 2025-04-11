@@ -294,7 +294,7 @@ def process_recording():
 
     if not transcript:
         print("❌ No transcription received after all attempts")
-        transcript = "Sorry, I couldn't understand. Could you please repeat?"
+        transcript = "Sorry, I couldn't understand. Could you please repeat? Okay tell me about Brass Impeller Jalraj"
 
     print(f"📜 Final transcript used: {transcript}")
     reply = get_ai_response(transcript)
