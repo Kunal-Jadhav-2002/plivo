@@ -88,7 +88,9 @@ def get_ai_response(query):
                     2. If you don't have specific information about a product, say so
                     3. If the user's question is unclear, ask for clarification
                     4. Keep responses brief and to the point
-                    5. If the user wants to book a meeting, provide the calendly link: https://calendly.com/ai-tecnvi-ai/30min"""
+                    5. If the user wants to book a meeting, provide the calendly link: https://calendly.com/ai-tecnvi-ai/30min
+                    6. You must be answering about the product according to its details in the database provided."""
+                    
                 },
                 {"role": "user", "content": query}
             ],
@@ -217,7 +219,7 @@ def process_recording():
 
     if not transcript:
         print("❌ No transcription received after all attempts")
-        transcript = "Sorry, I couldn't understand. Could you please repeat ? my phone number is 7058032981 can you tell me about Push Button 020 Red"
+        transcript = "Sorry, I couldn't understand. Could you please repeat ? my phone number is 7058032981 can you tell me about Push Button 020 Red from database."
 
     print(f"📜 Final transcript used: {transcript}")
     reply = get_ai_response(transcript)
