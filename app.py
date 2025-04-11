@@ -10,62 +10,73 @@ from dotenv import load_dotenv
 import google.generativeai as genai
 from pinecone import Pinecone, ServerlessSpec
 
+# Load environment variables
 load_dotenv()
 app = Flask(__name__)
 
-# Set up API keys
-GENAI_API_KEY = os.getenv("GENAI_API_KEY")
-PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
+def validate_environment():
+    """Validate all required environment variables and API keys"""
+    required_vars = {
+        "OPENAI_API_KEY": "OpenAI API key for GPT-4",
+        "PLIVO_AUTH_ID": "Plivo authentication ID",
+        "PLIVO_AUTH_TOKEN": "Plivo authentication token",
+        "DATABASE_URL": "PostgreSQL database URL",
+        "GENAI_API_KEY": "Google Gemini API key",
+        "PINECONE_API_KEY": "Pinecone API key"
+    }
+    
+    missing_vars = []
+    for var, description in required_vars.items():
+        if not os.getenv(var):
+            missing_vars.append(f"{var} ({description})")
+    
+    if missing_vars:
+        error_msg = "Missing required environment variables:\n" + "\n".join(f"- {var}" for var in missing_vars)
+        print(f"❌ {error_msg}")
+        raise EnvironmentError(error_msg)
+    
+    print("✅ All environment variables are set")
 
-# Configure Gemini API
-genai.configure(api_key=GENAI_API_KEY)
-llm_model_gemini = genai.GenerativeModel("gemini-1.5-flash")
+# Validate environment before proceeding
+validate_environment()
 
-# Initialize Pinecone client
-pc = Pinecone(api_key=PINECONE_API_KEY)
+# Initialize APIs with error handling
+try:
+    # Initialize OpenAI
+    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    print("✅ OpenAI client initialized")
 
-# Define Pinecone index name
-index_name = "voice-bot-gemini-embedding-004-index"
+    # Initialize Gemini
+    genai.configure(api_key=os.getenv("GENAI_API_KEY"))
+    llm_model_gemini = genai.GenerativeModel("gemini-1.5-flash")
+    print("✅ Gemini API configured")
 
-# Check if index exists, otherwise create it
-if index_name not in pc.list_indexes().names():
-    print("Creating a new index!")
-    pc.create_index(
-        name=index_name,
-        dimension=768,  # GEMINI 'text-embedding-004' returns 768-dim vectors
-        metric="cosine",
-        spec=ServerlessSpec(cloud="aws", region="us-east-1"),
-    )
-else:
-    print("Index already exists, connecting to it!")
+    # Initialize Pinecone
+    pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
+    print("✅ Pinecone client initialized")
 
-# Connect to the index
-index = pc.Index(index_name)
-print("Index loaded and index: ", index)
+    # Setup Pinecone index
+    index_name = "voice-bot-gemini-embedding-004-index"
+    if index_name not in pc.list_indexes().names():
+        print("Creating new Pinecone index...")
+        pc.create_index(
+            name=index_name,
+            dimension=768,
+            metric="cosine",
+            spec=ServerlessSpec(cloud="aws", region="us-east-1"),
+        )
+        print("✅ New Pinecone index created")
+    else:
+        print("✅ Using existing Pinecone index")
 
-# Check for required environment variables
-required_env_vars = [
-    "OPENAI_API_KEY",
-    "PLIVO_AUTH_ID",
-    "PLIVO_AUTH_TOKEN",
-    "DATABASE_URL",
-    "GENAI_API_KEY",
-    "PINECONE_API_KEY"
-]
+    index = pc.Index(index_name)
+    print("✅ Connected to Pinecone index")
 
-missing_vars = [var for var in required_env_vars if not os.getenv(var)]
-if missing_vars:
-    raise EnvironmentError(f"Missing required environment variables: {', '.join(missing_vars)}")
+except Exception as e:
+    print(f"❌ Error during API initialization: {str(e)}")
+    raise
 
-# Initialize OpenAI client
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-transcript_memory = {}
-
-# Plivo Authentication
-PLIVO_AUTH_ID = os.getenv("PLIVO_AUTH_ID")
-PLIVO_AUTH_TOKEN = os.getenv("PLIVO_AUTH_TOKEN")
-
-# Database connection pool
+# Initialize database connection
 try:
     db_pool = pool.SimpleConnectionPool(
         minconn=1,
@@ -73,26 +84,22 @@ try:
         dsn=os.getenv('DATABASE_URL'),
         sslmode='require'
     )
+    print("✅ Database connection pool created")
 except Exception as e:
-    print(f"❌ Database connection error: {e}")
+    print(f"❌ Database connection error: {str(e)}")
     raise
 
+# Initialize other variables
+transcript_memory = {}
+PLIVO_AUTH_ID = os.getenv("PLIVO_AUTH_ID")
+PLIVO_AUTH_TOKEN = os.getenv("PLIVO_AUTH_TOKEN")
+
 def request_llm_to_get_summarize(query, context):
-    user_question_content = f"""
-You are a highly accurate and detail-oriented question-answering assistant. Your task is to help users by answering their questions about products based on the provided search results. The search results contain information about multiple products, and each product has the following details:
-
-- **PRODUCT NAME**: The name of the product.
-- **Product Quantity**: The available quantity of the product.
-- **Product Rate**: The price of a single unit of the product in INR.
-- **Product Value**: The total value of the product, calculated as (Product Quantity × Product Rate).
-
-### Instructions:
-1. Carefully analyze the user's question and the provided search results.
-2. Answer the user's question **only** using the information from the search results. Do not make up or assume any details.
-3. User queries initially come in as voice recordings and are converted to text using a speech-to-text model. However, speech-to-text models might not always accurately capture product names mentioned in the query. When the exact product from the user's question is not identified in the search results:
-   - Suggest any closely matching products (if available) and provide their details.
-   - If no closely matching products available in search results, say that the requested product information is not available.
-4. Keep your response concise, accurate, and directly relevant to the user's question.
+    """Generate response using Gemini with error handling"""
+    try:
+        print(f"🤖 Processing query: {query[:100]}...")
+        user_question_content = f"""
+You are a highly accurate and detail-oriented question-answering assistant. Your task is to help users by answering their questions about products based on the provided search results.
 
 ### Current User Question:
 {query}
@@ -100,36 +107,57 @@ You are a highly accurate and detail-oriented question-answering assistant. Your
 ### Search Results:
 {context}
 
-### Your Task:
-Provide a clear and concise answer to the user's question based on the search results.
+Please provide a clear and concise answer based on the search results.
 """
-    response = llm_model_gemini.generate_content(user_question_content)
-    return response.text
+        response = llm_model_gemini.generate_content(user_question_content)
+        return response.text
+    except Exception as e:
+        print(f"❌ Error in request_llm_to_get_summarize: {str(e)}")
+        return "I apologize, but I'm having trouble generating a response. Please try again."
 
 def generate_text_answer(query_text):
-    print("query_text input to generate_text_answer: ", query_text)
-    query_response = genai.embed_content(model="models/text-embedding-004", content=query_text)
-    query_embedding = query_response["embedding"]
+    """Generate answer using vector search with error handling"""
+    try:
+        print("🔍 Generating embeddings...")
+        query_response = genai.embed_content(
+            model="models/text-embedding-004",
+            content=query_text
+        )
+        query_embedding = query_response["embedding"]
 
-    # Search in Pinecone
-    search_results = index.query(vector=query_embedding, top_k=5, include_metadata=True)
+        print("🔍 Searching in Pinecone...")
+        search_results = index.query(
+            vector=query_embedding,
+            top_k=5,
+            include_metadata=True
+        )
 
-    # Extract search results
-    context_lst = []
-    for match in search_results["matches"]:
-        chunk_text = match["metadata"]["text"]
-        context_lst.append(chunk_text)
+        context_lst = []
+        for match in search_results["matches"]:
+            if "metadata" in match and "text" in match["metadata"]:
+                context_lst.append(match["metadata"]["text"])
 
-    context = "\n-----------------\n".join(context_lst)
-    answer = request_llm_to_get_summarize(query_text, context)
-    return answer
+        if not context_lst:
+            return "I couldn't find any relevant information about that product."
+
+        context = "\n-----------------\n".join(context_lst)
+        return request_llm_to_get_summarize(query_text, context)
+
+    except Exception as e:
+        print(f"❌ Error in generate_text_answer: {str(e)}")
+        return "I apologize, but I'm having trouble searching for information. Please try again."
 
 def get_ai_response(query):
+    """Main function to get AI response with error handling"""
     try:
+        if not query or not isinstance(query, str):
+            return "Please provide a valid query."
+        
+        print(f"📝 Processing query: {query}")
         answer = generate_text_answer(query)
         return answer
     except Exception as e:
-        print(f"❌ Error generating response: {e}")
+        print(f"❌ Error in get_ai_response: {str(e)}")
         return "I apologize, but I'm having trouble understanding that. Could you please repeat your question?"
 
 @app.route("/", methods=["GET"])
