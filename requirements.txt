@@ -4,3 +4,5 @@ openai
 python-dotenv
 psycopg2
 gunicorn
+google-generativeai
+pinecone-client

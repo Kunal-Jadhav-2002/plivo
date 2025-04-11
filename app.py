@@ -7,16 +7,49 @@ from flask import Flask, request, Response
 from plivo import plivoxml
 from openai import OpenAI
 from dotenv import load_dotenv
+import google.generativeai as genai
+from pinecone import Pinecone, ServerlessSpec
 
 load_dotenv()
 app = Flask(__name__)
+
+# Set up API keys
+GENAI_API_KEY = "AIzaSyAoFIX9PCfWnNQdrJ2ZwuMEjrg-WeWJke0"
+PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
+
+# Configure Gemini API
+genai.configure(api_key=GENAI_API_KEY)
+llm_model_gemini = genai.GenerativeModel("gemini-1.5-flash")
+
+# Initialize Pinecone client
+pc = Pinecone(api_key=PINECONE_API_KEY)
+
+# Define Pinecone index name
+index_name = "voice-bot-gemini-embedding-004-index"
+
+# Check if index exists, otherwise create it
+if index_name not in pc.list_indexes().names():
+    print("Creating a new index!")
+    pc.create_index(
+        name=index_name,
+        dimension=768,  # GEMINI 'text-embedding-004' returns 768-dim vectors
+        metric="cosine",
+        spec=ServerlessSpec(cloud="aws", region="us-east-1"),
+    )
+else:
+    print("Index already exists, connecting to it!")
+
+# Connect to the index
+index = pc.Index(index_name)
+print("Index loaded and index: ", index)
 
 # Check for required environment variables
 required_env_vars = [
     "OPENAI_API_KEY",
     "PLIVO_AUTH_ID",
     "PLIVO_AUTH_TOKEN",
-    "DATABASE_URL"
+    "DATABASE_URL",
+    "PINECONE_API_KEY"
 ]
 
 missing_vars = [var for var in required_env_vars if not os.getenv(var)]
@@ -77,81 +110,52 @@ def get_user_by_phone(phone_number):
 
 def get_ai_response(query):
     try:
-        # First, use GPT-4 to extract the product name from the query
-        product_extraction = client.chat.completions.create(
-            model="gpt-4",
-            messages=[
-                {
-                    "role": "system",
-                    "content": """You are a product name extractor. Your task is to identify the product name from the user's query.
-                    Return ONLY the product name, nothing else. If no clear product name is found, return 'NO_PRODUCT'."""
-                },
-                {"role": "user", "content": query}
-            ],
-            max_tokens=50,
-            temperature=0.3
-        )
-        
-        product_name = product_extraction.choices[0].message.content.strip()
-        print(f"🔍 Extracted product name: {product_name}")
-        
-        if product_name != "NO_PRODUCT":
-            # Try to get product details from database
-            conn = db_pool.getconn()
-            try:
-                with conn.cursor() as cur:
-                    # Search for products with similar names
-                    cur.execute("""
-                        SELECT product_name, product_quantity, product_rate, product_value, description
-                        FROM products
-                        WHERE LOWER(product_name) LIKE LOWER(%s)
-                        LIMIT 1;
-                    """, (f"%{product_name}%",))
-                    result = cur.fetchone()
-                    
-                    if result:
-                        product_details = {
-                            "product_name": result[0],
-                            "quantity": result[1],
-                            "rate": result[2],
-                            "value": result[3],
-                            "description": result[4]
-                        }
-                        
-                        # Create a detailed response using the product information
-                        response = f"""The {product_details['product_name']} is available in our inventory.
-                        Available Quantity: {product_details['quantity']}
-                        Price per Unit: {product_details['rate']}
-                        Total Value: {product_details['value']}
-                        Description: {product_details['description']}"""
-                        
-                        return response
-            finally:
-                db_pool.putconn(conn)
-        
-        # If no product found or no product name extracted, use GPT-4 for a general response
-        completion = client.chat.completions.create(
-            model="gpt-4",
-            messages=[
-                {
-                    "role": "system",
-                    "content": """You are a helpful product information assistant. Your task is to help users by answering their questions about products. 
-                    When answering questions:
-                    1. Be concise and clear
-                    2. If you don't have specific information about a product, say so
-                    3. If the user's question is unclear, ask for clarification
-                    4. Keep responses brief and to the point
-                    5. If the user wants to book a meeting, provide the calendly link: https://calendly.com/ai-tecnvi-ai/30min"""
-                },
-                {"role": "user", "content": query}
-            ],
-            max_tokens=150,
-            temperature=0.7
-        )
-        return completion.choices[0].message.content
+        # Generate embedding for the query
+        query_response = genai.embed_content(model="models/text-embedding-004", content=query)
+        query_embedding = query_response["embedding"]
+
+        # Search in Pinecone
+        search_results = index.query(vector=query_embedding, top_k=5, include_metadata=True)
+
+        # Extract search results
+        context_lst = []
+        for match in search_results["matches"]:
+            chunk_text = match["metadata"]["text"]
+            context_lst.append(chunk_text)
+
+        context = "\n-----------------\n".join(context_lst)
+
+        # Generate response using Gemini
+        prompt = f"""
+You are a highly accurate and detail-oriented question-answering assistant. Your task is to help users by answering their questions about products based on the provided search results. The search results contain information about multiple products, and each product has the following details:
+
+- **PRODUCT NAME**: The name of the product.
+- **Product Quantity**: The available quantity of the product.
+- **Product Rate**: The price of a single unit of the product in INR.
+- **Product Value**: The total value of the product, calculated as (Product Quantity × Product Rate).
+
+### Instructions:
+1. Carefully analyze the user's question and the provided search results.
+2. Answer the user's question **only** using the information from the search results. Do not make up or assume any details.
+3. User queries initially come in as voice recordings and are converted to text using a speech-to-text model. However, speech-to-text models might not always accurately capture product names mentioned in the query. When the exact product from the user's question is not identified in the search results:
+   - Suggest any closely matching products (if available) and provide their details.
+   - If no closely matching products available in search results, say that the requested product information is not available.
+4. Keep your response concise, accurate, and directly relevant to the user's question.
+
+### Current User Question:
+{query}
+
+### Search Results:
+{context}
+
+### Your Task:
+Provide a clear and concise answer to the user's question based on the search results.
+"""
+        response = llm_model_gemini.generate_content(prompt)
+        return response.text
     except Exception as e:
-        print(f"❌ OpenAI Error: {e}")
-        return "Sorry, I couldn't understand that. Please repeat."
+        print(f"❌ Error generating response: {e}")
+        return "I apologize, but I'm having trouble understanding that. Could you please repeat your question?"
 
 @app.route("/", methods=["GET"])
 def home():
