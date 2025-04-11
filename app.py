@@ -6,7 +6,7 @@ from psycopg2 import pool
 import psycopg2
 from flask import Flask, request, Response
 from plivo import plivoxml
-from openai import OpenAI
+import openai
 from dotenv import load_dotenv
 import google.generativeai as genai
 from pinecone import Pinecone, ServerlessSpec
@@ -46,20 +46,16 @@ def validate_environment():
 validate_environment()
 
 # Initialize global variables
-client = None
+openai.api_key = os.getenv("OPENAI_API_KEY")
 llm_model_gemini = None
 index = None
 db_pool = None
 
 def initialize_services():
     """Initialize all external services with error handling"""
-    global client, llm_model_gemini, index, db_pool
+    global llm_model_gemini, index, db_pool
     
     try:
-        # Initialize OpenAI
-        client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-        logger.info("✅ OpenAI client initialized")
-
         # Initialize Gemini
         genai.configure(api_key=os.getenv("GENAI_API_KEY"))
         llm_model_gemini = genai.GenerativeModel("gemini-1.5-flash")
@@ -294,7 +290,7 @@ def process_recording():
 
     if not transcript:
         print("❌ No transcription received after all attempts")
-        transcript = "Sorry, I couldn't understand. Could you please repeat?"
+        transcript = "Sorry, I couldn't understand. Could you please repeat? And tell me more about Brass Impeller Jalraj"
 
     print(f"📜 Final transcript used: {transcript}")
     reply = get_ai_response(transcript)
