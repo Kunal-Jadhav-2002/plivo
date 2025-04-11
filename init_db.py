@@ -23,6 +23,20 @@ def init_db():
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
             """)
+            
+            # Create products table if it doesn't exist
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS products (
+                    id SERIAL PRIMARY KEY,
+                    product_name VARCHAR(255) NOT NULL,
+                    product_quantity INTEGER NOT NULL,
+                    product_rate DECIMAL(10,2) NOT NULL,
+                    product_value DECIMAL(10,2) NOT NULL,
+                    description TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+            """)
+            
             conn.commit()
             print("✅ Database initialized successfully!")
     except Exception as e:

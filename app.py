@@ -77,6 +77,59 @@ def get_user_by_phone(phone_number):
 
 def get_ai_response(query):
     try:
+        # First, use GPT-4 to extract the product name from the query
+        product_extraction = client.chat.completions.create(
+            model="gpt-4",
+            messages=[
+                {
+                    "role": "system",
+                    "content": """You are a product name extractor. Your task is to identify the product name from the user's query.
+                    Return ONLY the product name, nothing else. If no clear product name is found, return 'NO_PRODUCT'."""
+                },
+                {"role": "user", "content": query}
+            ],
+            max_tokens=50,
+            temperature=0.3
+        )
+        
+        product_name = product_extraction.choices[0].message.content.strip()
+        print(f"🔍 Extracted product name: {product_name}")
+        
+        if product_name != "NO_PRODUCT":
+            # Try to get product details from database
+            conn = db_pool.getconn()
+            try:
+                with conn.cursor() as cur:
+                    # Search for products with similar names
+                    cur.execute("""
+                        SELECT product_name, product_quantity, product_rate, product_value, description
+                        FROM products
+                        WHERE LOWER(product_name) LIKE LOWER(%s)
+                        LIMIT 1;
+                    """, (f"%{product_name}%",))
+                    result = cur.fetchone()
+                    
+                    if result:
+                        product_details = {
+                            "product_name": result[0],
+                            "quantity": result[1],
+                            "rate": result[2],
+                            "value": result[3],
+                            "description": result[4]
+                        }
+                        
+                        # Create a detailed response using the product information
+                        response = f"""The {product_details['product_name']} is available in our inventory.
+                        Available Quantity: {product_details['quantity']}
+                        Price per Unit: {product_details['rate']}
+                        Total Value: {product_details['value']}
+                        Description: {product_details['description']}"""
+                        
+                        return response
+            finally:
+                db_pool.putconn(conn)
+        
+        # If no product found or no product name extracted, use GPT-4 for a general response
         completion = client.chat.completions.create(
             model="gpt-4",
             messages=[
@@ -88,9 +141,7 @@ def get_ai_response(query):
                     2. If you don't have specific information about a product, say so
                     3. If the user's question is unclear, ask for clarification
                     4. Keep responses brief and to the point
-                    5. If the user wants to book a meeting, provide the calendly link: https://calendly.com/ai-tecnvi-ai/30min
-                    6. You must be answering about the product according to its details in the database provided."""
-                    
+                    5. If the user wants to book a meeting, provide the calendly link: https://calendly.com/ai-tecnvi-ai/30min"""
                 },
                 {"role": "user", "content": query}
             ],
