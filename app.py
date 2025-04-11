@@ -149,28 +149,49 @@ def handle_menu():
 @app.route("/transcription", methods=["POST"])
 def save_transcription():
     print("📝 Transcription Callback Received")
-    print("🔍 Raw form data:", request.form)
-    print("🔍 Raw JSON data:", request.get_json())
-
+    
+    # Get content type
+    content_type = request.headers.get('Content-Type', '')
+    print(f"📄 Content-Type: {content_type}")
+    
+    # Handle JSON data
+    if 'application/json' in content_type:
+        try:
+            data = request.get_json()
+            print("🔍 JSON Data:", data)
+            
+            recording_id = data.get("recording_id")
+            transcription_text = data.get("transcription")
+            
+            print(f"🎯 Recording ID from JSON: {recording_id}")
+            print(f"📝 Transcription Text from JSON: {transcription_text}")
+            
+            if recording_id and transcription_text:
+                transcript_memory[recording_id] = transcription_text.strip()
+                print(f"✅ Saved transcription for Recording ID: {recording_id}")
+                return "OK", 200
+            else:
+                print("❌ Missing Recording ID or Transcription Text in JSON")
+                return "Missing required fields", 400
+                
+        except Exception as e:
+            print(f"❌ Error processing JSON: {e}")
+            return str(e), 400
+    
+    # Handle form data as fallback
     recording_id = request.form.get("RecordingID")
     transcription_text = request.form.get("TranscriptionText")
     
-    # Try to get transcription from JSON if not in form data
-    if not transcription_text and request.is_json:
-        data = request.get_json()
-        transcription_text = data.get("TranscriptionText")
-        recording_id = data.get("RecordingID")
-
-    print(f"🎯 Recording ID: {recording_id}")
-    print(f"📝 Transcription Text: {transcription_text}")
-
+    print(f"🎯 Recording ID from form: {recording_id}")
+    print(f"📝 Transcription Text from form: {transcription_text}")
+    
     if recording_id and transcription_text:
         transcript_memory[recording_id] = transcription_text.strip()
         print(f"✅ Saved transcription for Recording ID: {recording_id}")
+        return "OK", 200
     else:
-        print("❌ Missing Recording ID or Transcription Text")
-
-    return "OK", 200
+        print("❌ Missing Recording ID or Transcription Text in form data")
+        return "Missing required fields", 400
 
 @app.route("/process-recording", methods=["POST"])
 def process_recording():
