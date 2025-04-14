@@ -282,6 +282,7 @@ def process_recording():
     print("⏳ Waiting for transcription...")
     for attempt in range(max_attempts):
         transcript = transcript_memory.get(recording_id)
+        print(f" {transcript_memory}")
         if transcript:
             print(f"✅ Transcription received on attempt {attempt + 1}: {transcript}")
             break
@@ -290,7 +291,7 @@ def process_recording():
 
     if not transcript:
         print("❌ No transcription received after all attempts")
-        transcript = "Sorry, I couldn't understand. Could you please repeat? And tell me more about Brass Impeller Jalraj"
+        transcript = "Sorry, I couldn't understand. Could you please repeat? And tell me more about Automatic Pump Controller -BTALI"
 
     print(f"📜 Final transcript used: {transcript}")
     reply = get_ai_response(transcript)
