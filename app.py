@@ -223,47 +223,61 @@ def handle_menu():
 def save_transcription():
     print("📝 Transcription Callback Received")
     
-    # Get content type
+    # Get content type and log complete request
     content_type = request.headers.get('Content-Type', '')
     print(f"📄 Content-Type: {content_type}")
+    print(f"📄 Headers: {dict(request.headers)}")
     
-    # Handle JSON data
+    recording_id = None
+    transcription_text = None
+    
+    # Try JSON format
     if 'application/json' in content_type:
         try:
-            data = request.get_json()
-            print("🔍 JSON Data:", data)
-            
-            recording_id = data.get("recording_id")
-            transcription_text = data.get("transcription")
-            
-            print(f"🎯 Recording ID from JSON: {recording_id}")
-            print(f"📝 Transcription Text from JSON: {transcription_text}")
-            
-            if recording_id and transcription_text:
-                transcript_memory[recording_id] = transcription_text.strip()
-                print(f"✅ Saved transcription for Recording ID: {recording_id}")
-                return "OK", 200
-            else:
-                print("❌ Missing Recording ID or Transcription Text in JSON")
-                return "Missing required fields", 400
-                
+            data = request.get_json(silent=True)
+            if data:
+                print(f"🔍 JSON Data: {data}")
+                # Try multiple possible field names
+                recording_id = data.get("recording_id") or data.get("RecordingID")
+                transcription_text = data.get("transcription") or data.get("TranscriptionText")
         except Exception as e:
             print(f"❌ Error processing JSON: {e}")
-            return str(e), 400
     
-    # Handle form data as fallback
-    recording_id = request.form.get("RecordingID")
-    transcription_text = request.form.get("TranscriptionText")
+    # Try form data if JSON didn't yield results
+    if not recording_id or not transcription_text:
+        form_data = request.form.to_dict()
+        if form_data:
+            print(f"🔍 Form Data: {form_data}")
+            recording_id = recording_id or form_data.get("RecordingID") or form_data.get("recording_id")
+            transcription_text = transcription_text or form_data.get("TranscriptionText") or form_data.get("transcription")
     
-    print(f"🎯 Recording ID from form: {recording_id}")
-    print(f"📝 Transcription Text from form: {transcription_text}")
+    # Try raw data as last resort
+    if not recording_id or not transcription_text:
+        try:
+            raw_data = request.get_data().decode('utf-8')
+            print(f"🔍 Raw Data: {raw_data}")
+            if raw_data.startswith('{') and raw_data.endswith('}'):
+                try:
+                    json_data = json.loads(raw_data)
+                    recording_id = recording_id or json_data.get("recording_id") or json_data.get("RecordingID")
+                    transcription_text = transcription_text or json_data.get("transcription") or json_data.get("TranscriptionText")
+                except:
+                    pass
+        except Exception as e:
+            print(f"❌ Error processing raw data: {e}")
+    
+    print(f"🎯 Recording ID extracted: {recording_id}")
+    print(f"📝 Transcription Text extracted: {transcription_text}")
     
     if recording_id and transcription_text:
-        transcript_memory[recording_id] = transcription_text.strip()
-        print(f"✅ Saved transcription for Recording ID: {recording_id}")
+        # Convert recording_id to string to ensure consistent keys
+        recording_id_str = str(recording_id)
+        transcript_memory[recording_id_str] = transcription_text.strip()
+        print(f"✅ Saved transcription for Recording ID: {recording_id_str}")
+        print(f"✅ Current transcript memory: {transcript_memory}")
         return "OK", 200
     else:
-        print("❌ Missing Recording ID or Transcription Text in form data")
+        print("❌ Missing Recording ID or Transcription Text in all attempts")
         return "Missing required fields", 400
 
 @app.route("/process-recording", methods=["POST"])
@@ -274,24 +288,47 @@ def process_recording():
     print(f"🎙️ Recording URL: {recording_url}")
     print(f"🆔 Recording ID: {recording_id}")
 
+    # Convert recording_id to string for consistent lookup
+    recording_id_str = str(recording_id) if recording_id else None
+    
     # Wait for the transcription to be ready with better logging
     transcript = None
-    max_attempts = 10  # Increased from 8 to 10
-    wait_time = 1  # seconds between attempts
+    max_attempts = 12  # Increased from 10 to 12
+    wait_time = 1.5  # Slightly increased wait time between attempts
     
-    print("⏳ Waiting for transcription...")
+    print(f"⏳ Waiting for transcription for recording ID: {recording_id_str}")
+    print(f"⏳ Current transcript memory keys: {list(transcript_memory.keys())}")
+    
     for attempt in range(max_attempts):
-        transcript = transcript_memory.get(recording_id)
-        print(f" {transcript_memory}")
-        if transcript:
-            print(f"✅ Transcription received on attempt {attempt + 1}: {transcript}")
+        # Check if our recording_id is in the memory dictionary
+        if recording_id_str and recording_id_str in transcript_memory:
+            transcript = transcript_memory[recording_id_str]
+            print(f"✅ Transcription found on attempt {attempt + 1}: {transcript}")
             break
+        
+        # Try alternate formats of the ID as fallback
+        if recording_id:
+            # Try with integer format
+            try:
+                int_id = int(recording_id)
+                if str(int_id) in transcript_memory:
+                    transcript = transcript_memory[str(int_id)]
+                    print(f"✅ Transcription found with integer ID on attempt {attempt + 1}")
+                    break
+            except:
+                pass
+        
+        # Log the full state of transcript_memory for debugging
+        if attempt % 3 == 0:  # Log every 3 attempts to avoid too much output
+            print(f"⏳ Transcript memory contents: {transcript_memory}")
+        
         print(f"⏳ Attempt {attempt + 1}/{max_attempts}: No transcription yet")
         time.sleep(wait_time)
 
     if not transcript:
         print("❌ No transcription received after all attempts")
-        transcript = "Sorry, I couldn't understand. Could you please repeat? And tell me more about Automatic Pump Controller -BTALI"
+        # Use a more general fallback message
+        transcript = "Sorry, I couldn't understand your question. Please try again."
 
     print(f"📜 Final transcript used: {transcript}")
     reply = get_ai_response(transcript)
@@ -301,6 +338,7 @@ def process_recording():
     response.add(plivoxml.SpeakElement(reply))
 
     # Ask for another query from the user, loop the process
+    response.add(plivoxml.SpeakElement("Do you have another question? Please speak after the beep."))
     response.add(plivoxml.RecordElement(
         action="https://web-production-aa492.up.railway.app/process-recording",
         method="POST",
