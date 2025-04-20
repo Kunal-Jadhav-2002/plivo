@@ -4,7 +4,7 @@ import json
 import logging
 from psycopg2 import pool
 import psycopg2
-from flask import Flask, request, Response
+from flask import Flask, request, Response, g
 from plivo import plivoxml
 import openai
 from dotenv import load_dotenv
@@ -102,6 +102,51 @@ initialize_services()
 transcript_memory = {}
 PLIVO_AUTH_ID = os.getenv("PLIVO_AUTH_ID")
 PLIVO_AUTH_TOKEN = os.getenv("PLIVO_AUTH_TOKEN")
+
+# Database connection helper functions
+def get_db_connection():
+    """Get a database connection from the pool"""
+    if not hasattr(g, 'db_conn'):
+        g.db_conn = db_pool.getconn() if db_pool else None
+        if g.db_conn:
+            logger.debug("✅ Got database connection from pool")
+    return g.db_conn
+
+def return_db_connection(exception=None):
+    """Return database connection to the pool"""
+    conn = g.pop('db_conn', None)
+    if conn is not None and db_pool:
+        db_pool.putconn(conn)
+        logger.debug("✅ Returned database connection to pool")
+
+# Register the teardown function to return connections after each request
+@app.teardown_appcontext
+def close_db_connection(e):
+    """Close database connection after each request"""
+    return_db_connection()
+
+# Function to execute database operations safely
+def execute_db_query(query, params=None, fetch=True):
+    """Execute a database query with proper connection handling"""
+    conn = get_db_connection()
+    if not conn:
+        logger.error("❌ No database connection available")
+        return None
+    
+    try:
+        with conn.cursor() as cur:
+            cur.execute(query, params)
+            if fetch:
+                result = cur.fetchall()
+            else:
+                result = None
+                conn.commit()
+            return result
+    except Exception as e:
+        if conn:
+            conn.rollback()
+        logger.error(f"❌ Database error: {str(e)}")
+        return None
 
 def request_llm_to_get_summarize(query, context):
     """Generate response using Gemini with error handling"""
@@ -273,6 +318,19 @@ def save_transcription():
         # Convert recording_id to string to ensure consistent keys
         recording_id_str = str(recording_id)
         transcript_memory[recording_id_str] = transcription_text.strip()
+        
+        # Optional: Save transcription to database
+        try:
+            # Example of using the database connection helper
+            query = """
+            INSERT INTO transcriptions (recording_id, transcription_text, created_at) 
+            VALUES (%s, %s, NOW())
+            """
+            execute_db_query(query, (recording_id_str, transcription_text.strip()), fetch=False)
+            logger.info(f"✅ Saved transcription to database for Recording ID: {recording_id_str}")
+        except Exception as e:
+            logger.error(f"❌ Failed to save transcription to database: {str(e)}")
+        
         print(f"✅ Saved transcription for Recording ID: {recording_id_str}")
         print(f"✅ Current transcript memory: {transcript_memory}")
         return "OK", 200
@@ -317,6 +375,17 @@ def process_recording():
                     break
             except:
                 pass
+            
+            # Try database lookup as a fallback
+            try:
+                query = "SELECT transcription_text FROM transcriptions WHERE recording_id = %s ORDER BY created_at DESC LIMIT 1"
+                result = execute_db_query(query, (recording_id_str,))
+                if result and result[0]:
+                    transcript = result[0][0]
+                    print(f"✅ Transcription found in database on attempt {attempt + 1}")
+                    break
+            except Exception as e:
+                logger.error(f"❌ Error looking up transcription in database: {str(e)}")
         
         # Log the full state of transcript_memory for debugging
         if attempt % 3 == 0:  # Log every 3 attempts to avoid too much output
@@ -351,6 +420,17 @@ def process_recording():
     ))
 
     return Response(response.to_string(), mimetype="text/xml")
+
+# Graceful shutdown function to close all DB connections
+def shutdown_handler():
+    """Close all database connections on application shutdown"""
+    if db_pool is not None:
+        db_pool.closeall()
+        logger.info("✅ All database connections closed during shutdown")
+
+# Register the shutdown handler to be called when the app terminates
+import atexit
+atexit.register(shutdown_handler)
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
