@@ -234,7 +234,7 @@ def incoming_call():
         num_digits=1,
         retries=1
     )
-    get_digits.add_speak("Welcome to Tecnvirons. Press 1 to talk to our AI assistant. Press 2 to end the call.")
+    get_digits.add_speak("Hey hey! I’m Ninja Genie , The , smart , Winny Welcome to Tecnvirons. Press 1 to talk to our AI assistant. Press 2 to end the call.")
     response.add(get_digits)
     response.add_speak("No input received. Goodbye.")
     return Response(response.to_string(), mimetype='text/xml')
