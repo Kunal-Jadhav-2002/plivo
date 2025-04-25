@@ -19,4 +19,5 @@ asyncio
 pydantic==2.6.1
 wave
 numpy==1.26.4
+chainlit==0.7.500
 
