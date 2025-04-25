@@ -1,4 +1,5 @@
 flask
+fastapi
 flask-socketio
 plivo
 openai
@@ -12,3 +13,9 @@ gevent
 requests
 python-dateutil
 tenacity
+uvicorn
+websockets
+asyncio
+pydantic
+wave
+openai-realtime
