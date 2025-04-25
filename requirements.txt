@@ -18,4 +18,4 @@ websockets
 asyncio
 pydantic
 wave
-openai-realtime
+
