@@ -92,14 +92,18 @@ def execute_db_query(query, params=None, fetch=True):
 def init_db_pool():
     """Initialize the database connection pool"""
     global db_pool
-    if db_pool is None:
-        db_pool = SimpleConnectionPool(
-            minconn=1,
-            maxconn=5,
-            dsn=os.getenv('DATABASE_URL'),
-            sslmode='require'
-        )
-        logger.info("✅ Database connection pool initialized")
+    try:
+        if db_pool is None:
+            db_pool = SimpleConnectionPool(
+                minconn=1,
+                maxconn=5,
+                dsn=os.getenv('DATABASE_URL'),
+                sslmode='require'
+            )
+            logger.info("✅ Database connection pool initialized")
+    except Exception as e:
+        logger.error(f"Failed to initialize database pool: {str(e)}")
+        raise
 
 # ======================== USER DATA FUNCTIONS ========================
 def get_user_by_phone(phone_number):
@@ -179,14 +183,20 @@ def init_ai_services():
     try:
         # Initialize OpenAI
         openai.api_key = os.getenv("OPENAI_API_KEY")
+        if not openai.api_key:
+            raise ValueError("OPENAI_API_KEY not found in environment variables")
         logger.info("✅ OpenAI API configured")
         
         # Initialize Gemini
         genai.configure(api_key=os.getenv("GENAI_API_KEY"))
+        if not os.getenv("GENAI_API_KEY"):
+            raise ValueError("GENAI_API_KEY not found in environment variables")
         logger.info("✅ Gemini API configured")
         
         # Initialize Pinecone
         pc = Pinecone(api_key=os.getenv("PINECONE_API_KEY"))
+        if not os.getenv("PINECONE_API_KEY"):
+            raise ValueError("PINECONE_API_KEY not found in environment variables")
         logger.info("✅ Pinecone client initialized")
         
         # Setup Pinecone index
@@ -541,34 +551,54 @@ def home():
 
 @flask_app.route("/incoming-call", methods=["POST"])
 def incoming_call():
-    logger.info(f"📞 Incoming call: {request.form}")
-    
-    call_uuid = request.form.get("CallUUID")
-    caller_id = request.form.get("From")
-    
-    # Create a response with Plivo XML
-    response = plivoxml.ResponseElement()
-    response.add_speak("Welcome to TechEnvirons. Connecting you to our AI assistant...")
-    
-    # Connect to the webhook that will handle the conversation
-    response.add(
-        plivoxml.ConnectElement().add(
-            plivoxml.StreamElement(
-                callbackUrl=f"wss://{request.host}/ws/call/{call_uuid}",
-                callbackMethod="GET",
-                streamTimeout=600,  # 10 minutes max call time
-                contentType="audio/l16;rate=16000,audio/l16;rate=8000"
-            )
+    """Handle incoming calls from Plivo"""
+    try:
+        logger.info(f"📞 Incoming call: {request.form}")
+        
+        call_uuid = request.form.get("CallUUID")
+        caller_id = request.form.get("From")
+        
+        if not call_uuid or not caller_id:
+            logger.error("Missing required call parameters")
+            return Response("Missing required parameters", status=400)
+        
+        # Create a response with Plivo XML
+        response = plivoxml.ResponseElement()
+        response.add_speak("Welcome to our product information service. Please ask about any product you're interested in.")
+        
+        # Add WebSocket connection for real-time audio
+        connect = response.add_connect()
+        stream = connect.add_stream()
+        stream.set_attributes({
+            "callbackUrl": f"wss://web-production-aa492.up.railway.app/ws/call/{call_uuid}",
+            "callbackMethod": "GET",
+            "streamTimeout": "600",  # 10 minutes max call time
+            "contentType": "audio/l16;rate=16000,audio/l16;rate=8000"
+        })
+        
+        # Store call information
+        active_calls[call_uuid] = {
+            "from_number": caller_id,
+            "start_time": time.time(),
+            "audio_queue": Queue(),
+            "transcript": "",
+            "messages": [
+                {"role": "system", "content": "You are a helpful assistant that provides information about products and services."}
+            ]
+        }
+        
+        # Create Realtime client in a separate thread
+        asyncio.run_coroutine_threadsafe(
+            create_realtime_client(call_uuid, caller_id),
+            asyncio.get_event_loop()
         )
-    )
-    
-    # Async task to create the OpenAI Realtime client
-    asyncio.run_coroutine_threadsafe(
-        create_realtime_client(call_uuid, caller_id),
-        asyncio.get_event_loop()
-    )
-    
-    return Response(response.to_string(), mimetype='text/xml')
+        
+        logger.info(f"Call answered: {call_uuid} from {caller_id}")
+        return Response(str(response), mimetype="text/xml")
+        
+    except Exception as e:
+        logger.error(f"Error in incoming_call: {str(e)}")
+        return Response("Internal Server Error", status=500)
 
 @flask_app.route("/hangup", methods=["POST"])
 def call_hangup():
@@ -586,6 +616,185 @@ def call_hangup():
         active_calls.pop(call_uuid, None)
     
     return "OK"
+
+@flask_app.route("/answer", methods=["GET", "POST"])
+def answer_call():
+    """Handle incoming calls"""
+    try:
+        # Get call parameters
+        call_uuid = request.values.get("CallUUID")
+        from_number = request.values.get("From")
+        
+        if not call_uuid or not from_number:
+            logger.error("Missing required call parameters")
+            return Response("Missing required parameters", status=400)
+            
+        # Create response
+        response = plivoxml.Response()
+        speak = response.addSpeak("Hello! How can I help you today?")
+        speak.setAttributes({
+            "voice": "Polly.Amy",
+            "language": "en-GB"
+        })
+        
+        # Add record element
+        record = response.addRecord()
+        record.setAttributes({
+            "action": f"/recording_callback/{call_uuid}",
+            "method": "POST",
+            "maxLength": "30",
+            "playBeep": "true",
+            "finishOnKey": "#",
+            "transcriptionType": "auto",
+            "transcriptionUrl": f"/transcription_callback/{call_uuid}",
+            "transcriptionMethod": "POST"
+        })
+        
+        # Store call information
+        active_calls[call_uuid] = {
+            "from_number": from_number,
+            "start_time": time.time()
+        }
+        
+        logger.info(f"Call answered: {call_uuid} from {from_number}")
+        return Response(str(response), mimetype="text/xml")
+        
+    except Exception as e:
+        logger.error(f"Error in answer_call: {str(e)}")
+        return Response("Internal Server Error", status=500)
+
+@flask_app.route("/recording_callback/<call_uuid>", methods=["POST"])
+def recording_callback(call_uuid):
+    """Handle recording completion"""
+    try:
+        if call_uuid not in active_calls:
+            logger.error(f"Unknown call UUID: {call_uuid}")
+            return Response("Unknown call", status=404)
+            
+        recording_url = request.values.get("RecordUrl")
+        if not recording_url:
+            logger.error("No recording URL provided")
+            return Response("No recording URL", status=400)
+            
+        # Store recording URL
+        active_calls[call_uuid]["recording_url"] = recording_url
+        logger.info(f"Recording received for call {call_uuid}")
+        
+        return Response("OK", status=200)
+        
+    except Exception as e:
+        logger.error(f"Error in recording_callback: {str(e)}")
+        return Response("Internal Server Error", status=500)
+
+@flask_app.route("/transcription_callback/<call_uuid>", methods=["POST"])
+def transcription_callback(call_uuid):
+    """Handle transcription completion"""
+    try:
+        if call_uuid not in active_calls:
+            logger.error(f"Unknown call UUID: {call_uuid}")
+            return Response("Unknown call", status=404)
+            
+        # Get transcription data
+        transcription = request.values.get("transcription")
+        if not transcription:
+            logger.error("No transcription provided")
+            return Response("No transcription", status=400)
+            
+        # Store transcription
+        active_calls[call_uuid]["transcription"] = transcription
+        logger.info(f"Transcription received for call {call_uuid}: {transcription}")
+        
+        # Process transcription and generate response
+        response = get_ai_response(transcription)
+        
+        # Create Plivo response
+        plivo_response = plivoxml.Response()
+        speak = plivo_response.addSpeak(response)
+        speak.setAttributes({
+            "voice": "Polly.Amy",
+            "language": "en-GB"
+        })
+        
+        return Response(str(plivo_response), mimetype="text/xml")
+        
+    except Exception as e:
+        logger.error(f"Error in transcription_callback: {str(e)}")
+        return Response("Internal Server Error", status=500)
+
+# ======================== AI RESPONSE GENERATION ========================
+def get_ai_response(query: str) -> str:
+    """Generate AI response based on user query"""
+    try:
+        # First try to get product details from database
+        with get_db_connection() as conn:
+            with conn.cursor() as cur:
+                # Search for exact match
+                cur.execute("""
+                    SELECT product_name, product_quantity, product_rate, product_value, description 
+                    FROM products 
+                    WHERE LOWER(product_name) = LOWER(%s)
+                """, (query,))
+                result = cur.fetchone()
+                
+                if result:
+                    product_name, quantity, rate, value, description = result
+                    return f"""
+                    I found information about {product_name}:
+                    - Available Quantity: {quantity}
+                    - Price per Unit: ${rate}
+                    - Total Value: ${value}
+                    - Description: {description}
+                    Would you like to know more about this product?
+                    """
+                
+                # If no exact match, search for similar products
+                cur.execute("""
+                    SELECT product_name, product_quantity, product_rate, product_value, description 
+                    FROM products 
+                    WHERE LOWER(product_name) LIKE LOWER(%s)
+                """, (f"%{query}%",))
+                result = cur.fetchone()
+                
+                if result:
+                    product_name, quantity, rate, value, description = result
+                    return f"""
+                    I found a similar product: {product_name}
+                    - Available Quantity: {quantity}
+                    - Price per Unit: ${rate}
+                    - Total Value: ${value}
+                    - Description: {description}
+                    Is this the product you were looking for?
+                    """
+        
+        # If no product found, use GPT-4 for general response
+        response = openai.ChatCompletion.create(
+            model="gpt-4",
+            messages=[
+                {"role": "system", "content": "You are a helpful assistant that provides information about products and services."},
+                {"role": "user", "content": query}
+            ]
+        )
+        
+        return response.choices[0].message.content
+        
+    except Exception as e:
+        logger.error(f"Error in get_ai_response: {str(e)}")
+        return "I apologize, but I'm having trouble processing your request right now. Please try again later."
+
+# ======================== ERROR HANDLERS ========================
+@flask_app.errorhandler(404)
+def not_found_error(error):
+    return Response("Not Found", status=404)
+
+@flask_app.errorhandler(500)
+def internal_error(error):
+    logger.error(f"Internal Server Error: {str(error)}")
+    return Response("Internal Server Error", status=500)
+
+@fastapi_app.exception_handler(Exception)
+async def global_exception_handler(request, exc):
+    logger.error(f"Global Exception: {str(exc)}")
+    return Response("Internal Server Error", status=500)
 
 # ======================== WEBSOCKET HANDLER ========================
 @fastapi_app.websocket("/ws/call/{call_uuid}")

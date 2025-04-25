@@ -1,1 +1,1 @@
-web: python app.py
+web: gunicorn app:fastapi_app --workers 4 --timeout 120
