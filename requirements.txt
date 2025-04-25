@@ -18,4 +18,5 @@ websockets==12.0
 asyncio
 pydantic==2.6.1
 wave
+numpy==1.26.4
 
