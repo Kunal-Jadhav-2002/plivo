@@ -49,7 +49,7 @@ flask_app = Flask(__name__)
 fastapi_app = FastAPI()
 
 # Add Flask app as a middleware to FastAPI
-fastapi_app.mount("/plivo", WSGIMiddleware(flask_app))
+fastapi_app.mount("/", WSGIMiddleware(flask_app))
 
 # Global variables
 db_pool = None
